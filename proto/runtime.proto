@@ -1,0 +1,167 @@
+syntax = "proto3";
+
+package runtime.v1;
+
+option cc_enable_arenas = true;
+
+// ============================================================
+// Общие типы
+// ============================================================
+
+enum ContainerState {
+  CONTAINER_STATE_UNSPECIFIED = 0;
+  CONTAINER_STATE_CREATED     = 1;
+  CONTAINER_STATE_RUNNING     = 2;
+  CONTAINER_STATE_STOPPED     = 3;
+  CONTAINER_STATE_EXITED      = 4;
+}
+
+enum StatusCode {
+  STATUS_OK                  = 0;
+  STATUS_NOT_FOUND           = 1;
+  STATUS_INVALID_ARGUMENT    = 2;
+  STATUS_FAILED_PRECONDITION = 3;
+  STATUS_INTERNAL            = 4;
+}
+
+message Status {
+  StatusCode code    = 1;
+  string     message = 2;
+}
+
+message ContainerInfo {
+  string          id         = 1;
+  string          rootfs     = 2;
+  repeated string argv       = 3;
+  bool            tty        = 4;
+  bool            detached   = 5;
+  ContainerState  state      = 6;
+  int32           pid        = 7;
+  int64           created_at = 8;
+  int32           exit_code  = 9;
+}
+
+// ============================================================
+// Create
+// ============================================================
+
+message CreateRequest {
+  string              rootfs   = 1;
+  repeated string     argv     = 2;
+  bool                tty      = 3;
+  bool                detached = 4;
+  string              cwd      = 5;
+}
+
+message CreateResponse {
+  Status        status = 1;
+  string        id     = 2;
+  ContainerInfo info   = 3;
+}
+
+// ============================================================
+// List
+// ============================================================
+
+message ListRequest {
+  bool include_stopped = 1;
+}
+
+message ListResponse {
+  Status                 status     = 1;
+  repeated ContainerInfo containers = 2;
+}
+
+// ============================================================
+// Kill
+// ============================================================
+message KillRequest {
+  string id = 1;
+}
+
+message KillResponse {
+  Status status = 1;
+}
+
+// ============================================================
+// Logs
+// ============================================================
+
+message LogsRequest {
+  string id         = 1;
+  bool   follow     = 2;
+  int64  tail_lines = 3;
+}
+
+message LogChunk {
+  Status status    = 1; 
+  bytes  data      = 2;
+  bool   is_stderr = 3;
+  bool   eof       = 4;
+}
+
+// ============================================================
+// Attach (PTY)
+// ============================================================
+
+message ResizeEvent {
+  uint32 rows = 1;
+  uint32 cols = 2;
+}
+
+message AttachInput {
+  oneof event {
+    bytes       data   = 1;
+    ResizeEvent resize = 2;
+    bool        eof    = 3;
+  }
+}
+
+message ExitStatus {
+  int32 exit_code = 1;
+  int32 signal    = 2;
+}
+
+message AttachOutput {
+  oneof event {
+    bytes      data = 1;
+    ExitStatus exit = 2;
+  }
+}
+
+// ============================================================
+// Конверты для мультиплексирования
+// ============================================================
+
+message ClientMessage {
+  uint64 request_id = 1;
+  oneof msg {
+    CreateRequest create = 10;
+    ListRequest   list   = 11;
+    LogsRequest   logs   = 12;
+    AttachInput   attach = 13;
+    KillRequest   kill   = 14;
+  }
+}
+
+message ServerMessage {
+  uint64 request_id = 1;
+  oneof msg {
+    CreateResponse create = 10;
+    ListResponse   list   = 11;
+    LogChunk       log    = 12;
+    AttachOutput   attach = 13;
+    KillResponse   kill   = 14;
+  }
+}
+
+// ============================================================
+// Состояние контейнера на диске (state.pb)
+// ============================================================
+
+message ContainerStateFile {
+  ContainerInfo info        = 1;
+  string        shim_socket = 2;  // путь к Unix-сокету shim'а
+  string        log_path    = 3;  // путь к лог-файлу (пусто для tty=true)
+  int32         shim_pid    = 4;  // pid shim-процесса (не контейнера!)
+}

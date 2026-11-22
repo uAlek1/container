@@ -1,0 +1,42 @@
+syntax = "proto3";
+
+package shim.v1;
+
+option cc_enable_arenas = true;
+
+import "runtime.proto";
+
+message StatusRequest {}
+
+message StatusResponse {
+  runtime.v1.Status         status    = 1;
+  runtime.v1.ContainerState state     = 2;
+  int32                     exit_code = 3;
+  int32                     pid       = 4;
+}
+
+message SignalRequest {
+  int32 signal = 1;
+}
+
+message SignalResponse {
+  runtime.v1.Status status = 1;
+}
+
+message ShimClientMessage {
+  uint64 request_id = 1;
+  oneof msg {
+    StatusRequest                    status = 10;
+    SignalRequest                    signal = 11;
+    runtime.v1.AttachInput           attach = 12;
+  }
+}
+
+message ShimServerMessage {
+  uint64 request_id = 1;
+  oneof msg {
+    StatusResponse                   status = 10;
+    SignalResponse                   signal = 11;
+    runtime.v1.AttachOutput          attach = 12;
+  }
+}
