@@ -1,19 +1,18 @@
-add_executable(your-shim
+add_executable(shim
   main.cpp
-  src/shim_service.cpp
-  src/container_process.cpp
-  src/pty.cpp
-  src/log_writer.cpp
+  service.cpp
+  container_process.cpp
+  # src/pty.cpp
+  # src/log_writer.cpp
 )
 
-target_include_directories(your-shim PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/include
+target_include_directories(shim PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
-target_link_libraries(your-shim PRIVATE
-  your-common
-  your-proto
-  gRPC::grpc++
+target_link_libraries(shim PRIVATE
+  container-common
+  proto_lib
 )
 
-target_compile_features(your-shim PRIVATE cxx_std_20)
+target_compile_features(shim PRIVATE cxx_std_23)

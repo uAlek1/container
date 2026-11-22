@@ -75,32 +75,64 @@ RawMode::~RawMode() {
     restore(fd_, &saved_);
 }
 
-int attach_loop(cli::Client& client, int host_in, int host_out) {
+int attach_loop(cli::Client& client, const std::string& id, int host_in, int host_out) {
+    uint64_t attach_id = client.next_request_id();
+
     try {
-        runtime::v1::ClientMessage req;
-        req.mutable_attach();
-        client.send(req);
+        runtime::v1::ClientMessage msg;
+        msg.set_request_id(attach_id);
+        msg.mutable_attach()->set_id(id);
+        client.send(msg);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "attach: %s\n", e.what());
         return 1;
     }
 
-    send_resize(client, host_in);
+    auto send_attach = [&](runtime::v1::AttachInput&& in) -> bool {
+        in.set_id(id);
+        runtime::v1::ClientMessage msg;
+        msg.set_request_id(attach_id);
+        *msg.mutable_attach() = std::move(in);
+        try {
+            client.send(msg);
+            return true;
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "attach: %s\n", e.what());
+            return false;
+        }
+    };
+
+    auto send_resize = [&]() -> bool {
+        struct winsize ws{};
+        if (::ioctl(host_in, TIOCGWINSZ, &ws) != 0 || ws.ws_row == 0 || ws.ws_col == 0) {
+            return true;  // размер неизвестен — не критично
+        }
+        runtime::v1::AttachInput in;
+        in.mutable_resize()->set_rows(ws.ws_row);
+        in.mutable_resize()->set_cols(ws.ws_col);
+        return send_attach(std::move(in));
+    };
+
+    if (!send_resize()) return 1;
 
     struct sigaction old_sa{};
     struct sigaction sa{};
-    sa.sa_handler = winch_handler;
+    sa.sa_handler = winch_handler;  // extern "C" void winch_handler(int) { g_winch = 1; }
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
+    sa.sa_flags = 0;  // без SA_RESTART: epoll_wait должен возвращать EINTR
     bool winch_installed = false;
     if (::sigaction(SIGWINCH, &sa, &old_sa) == 0) {
         winch_installed = true;
     }
 
+    auto restore_sigwinch = [&]() {
+        if (winch_installed) ::sigaction(SIGWINCH, &old_sa, nullptr);
+    };
+
     int epfd = ::epoll_create1(EPOLL_CLOEXEC);
     if (epfd < 0) {
-        if (winch_installed) ::sigaction(SIGWINCH, &old_sa, nullptr);
         std::fprintf(stderr, "attach: epoll_create1: %s\n", std::strerror(errno));
+        restore_sigwinch();
         return 1;
     }
 
@@ -121,7 +153,7 @@ int attach_loop(cli::Client& client, int host_in, int host_out) {
     for (;;) {
         if (g_winch) {
             g_winch = 0;
-            send_resize(client, host_in);
+            if (!send_resize()) break;
         }
 
         int nfds = ::epoll_wait(epfd, events, 2, -1);
@@ -138,22 +170,18 @@ int attach_loop(cli::Client& client, int host_in, int host_out) {
             if (fd == host_in && stdin_open) {
                 ssize_t n = ::read(host_in, buf, sizeof(buf));
                 if (n > 0) {
-                    runtime::v1::ClientMessage msg;
-                    msg.mutable_attach()->set_data(std::string(buf, static_cast<size_t>(n)));
-                    try {
-                        client.send(msg);
-                    } catch (const std::exception& e) {
-                        std::fprintf(stderr, "attach: %s\n", e.what());
+                    runtime::v1::AttachInput in;
+                    in.set_data(std::string(buf, static_cast<size_t>(n)));
+                    if (!send_attach(std::move(in))) {
                         done = true;
                     }
                 } else if (n == 0) {
+                    // Ctrl+D: закрыть stdin контейнера, но не рвать соединение.
                     stdin_open = false;
                     ::epoll_ctl(epfd, EPOLL_CTL_DEL, host_in, nullptr);
-                    runtime::v1::ClientMessage msg;
-                    msg.mutable_attach()->set_eof(true);
-                    try {
-                        client.send(msg);
-                    } catch (const std::exception&) {
+                    runtime::v1::AttachInput in;
+                    in.set_eof(true);
+                    if (!send_attach(std::move(in))) {
                         done = true;
                     }
                 } else if (errno != EINTR) {
@@ -162,7 +190,7 @@ int attach_loop(cli::Client& client, int host_in, int host_out) {
             } else if (fd == client.fd()) {
                 runtime::v1::ServerMessage resp;
                 try {
-                    if (!client.recv(resp, false)) {
+                    if (!client.recv(resp)) {
                         done = true;
                         break;
                     }
@@ -181,7 +209,8 @@ int attach_loop(cli::Client& client, int host_in, int host_out) {
                 const auto& out = resp.attach();
                 if (out.has_data()) {
                     const std::string& data = out.data();
-                    if (!write_all(host_out, data.data(), static_cast<ssize_t>(data.size()))) {
+                    if (!write_all(host_out, data.data(),
+                                             static_cast<ssize_t>(data.size()))) {
                         done = true;
                     }
                 } else if (out.has_exit()) {
@@ -195,7 +224,7 @@ int attach_loop(cli::Client& client, int host_in, int host_out) {
     }
 
     ::close(epfd);
-    if (winch_installed) ::sigaction(SIGWINCH, &old_sa, nullptr);
+    restore_sigwinch();
     return exit_code;
 }
 

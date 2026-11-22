@@ -129,12 +129,20 @@ int cmd_list(Client& client, std::span<const std::string_view> args) {
 int cmd_run(Client& client, std::span<const std::string_view> args) {
     bool detached = false;
     bool force_tty = false;
-    std::vector<std::pair<std::string, std::string>> env;
     std::string cwd;
     std::vector<std::string> positional;
+    std::vector<std::string> cmd_argv;
 
     for (size_t i = 0; i < args.size(); ++i) {
         auto a = args[i];
+
+        // Как только набрали <rootfs> и <cmd>, всё остальное — аргументы
+        // команды, даже если начинается с '-'. Это поведение docker run.
+        if (positional.size() >= 2) {
+            cmd_argv.emplace_back(a);
+            continue;
+        }
+
         if (a == "-d" || a == "--detach") {
             detached = true;
         } else if (a == "--tty" || a == "-t") {
@@ -145,21 +153,30 @@ int cmd_run(Client& client, std::span<const std::string_view> args) {
                 return kExitUsage;
             }
             cwd = std::string(args[++i]);
+            if (cwd.empty() || cwd.front() != '/') {
+                std::fprintf(stderr, "run: --cwd must be an absolute path (got '%s')\n",
+                             cwd.c_str());
+                return kExitUsage;
+            }
         } else if (a == "-h" || a == "--help") {
-            std::printf("Usage: your-cli run [-d] [--tty] [-e K=V]... [--cwd DIR] <rootfs> [<cmd> [args...]]\n");
+            std::printf("Usage: your-cli run [-d] [--tty] [--cwd DIR] <rootfs> [<cmd> [args...]]\n");
             std::printf("  -d, --detach   запустить в фоне, напечатать id и выйти\n");
             std::printf("  -t, --tty      выделить PTY (по умолчанию — без -d)\n");
-            std::printf("  -e, --env K=V  переменная окружения (можно повторять)\n");
             std::printf("  --cwd DIR      рабочая директория внутри контейнера\n");
             std::printf("\nЕсли <cmd> не задан, используется /bin/sh.\n");
+            std::printf("Всё после <cmd> передаётся команде как есть (включая -флаги).\n");
             return kExitOk;
-        } else if (!a.empty() && a.front() == '-' && a.size() > 1) {
-            if (a == "--") {
-                for (size_t j = i + 1; j < args.size(); ++j) {
+        } else if (a == "--") {
+            // Явный разделитель: всё после него — позиционные.
+            for (size_t j = i + 1; j < args.size(); ++j) {
+                if (positional.size() < 2) {
                     positional.emplace_back(args[j]);
+                } else {
+                    cmd_argv.emplace_back(args[j]);
                 }
-                break;
             }
+            break;
+        } else if (!a.empty() && a.front() == '-' && a.size() > 1) {
             std::fprintf(stderr, "run: unknown argument '%.*s'\n",
                          static_cast<int>(a.size()), a.data());
             return kExitUsage;
@@ -174,12 +191,16 @@ int cmd_run(Client& client, std::span<const std::string_view> args) {
     }
 
     std::string rootfs = positional[0];
-    std::vector<std::string> argv(positional.begin() + 1, positional.end());
-    if (argv.empty()) {
+    std::vector<std::string> argv;
+    if (positional.size() >= 2) {
+        argv.push_back(positional[1]);
+        argv.insert(argv.end(), cmd_argv.begin(), cmd_argv.end());
+    } else {
         argv.emplace_back("/bin/sh");
     }
 
     bool tty = force_tty || !detached;
+
     if (!detached && !::isatty(STDIN_FILENO)) {
         std::fprintf(stderr, "run: interactive mode requires a TTY on stdin "
                              "(use -d for detached mode)\n");
@@ -238,7 +259,7 @@ int cmd_run(Client& client, std::span<const std::string_view> args) {
 
     try {
         terminal::RawMode raw(STDIN_FILENO);
-        return terminal::attach_loop(client, STDIN_FILENO, STDOUT_FILENO);
+        return terminal::attach_loop(client, create.id(), STDIN_FILENO, STDOUT_FILENO);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "run: %s\n", e.what());
         return kExitError;
@@ -408,7 +429,7 @@ int cmd_attach(Client& client, std::span<const std::string_view> args) {
 
     try {
         terminal::RawMode raw(STDIN_FILENO);
-        return terminal::attach_loop(client, STDIN_FILENO, STDOUT_FILENO);
+        return terminal::attach_loop(client, id, STDIN_FILENO, STDOUT_FILENO);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "attach: %s\n", e.what());
         return kExitError;

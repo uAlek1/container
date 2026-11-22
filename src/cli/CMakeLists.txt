@@ -10,4 +10,4 @@ target_link_libraries(container-cli PRIVATE
   proto_lib
 )
 
-target_compile_features(container-cli PRIVATE cxx_std_20)
+target_compile_features(container-cli PRIVATE cxx_std_23)

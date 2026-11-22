@@ -19,6 +19,6 @@ private:
     struct termios saved_{};
 };
 
-int attach_loop(cli::Client& client, int host_in, int host_out);
+int attach_loop(cli::Client& client, const std::string& id, int host_in, int host_out);
 
 }  // namespace terminal

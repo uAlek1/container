@@ -110,10 +110,12 @@ message ResizeEvent {
 }
 
 message AttachInput {
+  string id = 1; 
+
   oneof event {
-    bytes       data   = 1;
-    ResizeEvent resize = 2;
-    bool        eof    = 3;
+    bytes       data   = 2;
+    ResizeEvent resize = 3;
+    bool        eof    = 4;
   }
 }
 

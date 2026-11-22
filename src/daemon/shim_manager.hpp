@@ -25,12 +25,14 @@ public:
                                        int32_t& out_exit_code,
                                        int32_t& out_pid) = 0;
 
-    using OutputCallback = std::function<void(const runtime::v1::AttachOutput&)>;
+    using OutputCallback = std::function<bool(const runtime::v1::AttachOutput&)>;
     virtual void attach(const std::string& id,
-                        OutputCallback on_output,
-                        std::function<bool(runtime::v1::AttachInput&)> next_input) = 0;
+                        int client_fd,
+                        OutputCallback send_to_client) = 0;
 };
 
-std::unique_ptr<ShimManager> make_stub_shim_manager();
+//std::unique_ptr<ShimManager> make_stub_shim_manager();
+
+std::unique_ptr<ShimManager> make_real_shim_manager(std::string shim_path);
 
 }  // namespace daemon

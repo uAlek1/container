@@ -3,7 +3,8 @@ add_executable(container-daemon
   runtime_service.cpp
   registry.cpp
   shim_manager.cpp
-  #recovery.cpp
+  state_poller.cpp
+  recovery.cpp
 )
 
 target_include_directories(container-daemon PRIVATE
@@ -15,4 +16,4 @@ target_link_libraries(container-daemon PRIVATE
   proto_lib
 )
 
-target_compile_features(container-daemon PRIVATE cxx_std_20)
+target_compile_features(container-daemon PRIVATE cxx_std_23)

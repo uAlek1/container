@@ -12,4 +12,4 @@ target_link_libraries(container-common PUBLIC
   proto_lib
 )
 
-target_compile_features(container-common PUBLIC cxx_std_20)
+target_compile_features(container-common PUBLIC cxx_std_23)

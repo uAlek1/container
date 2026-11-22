@@ -16,6 +16,9 @@
 #include "registry.hpp"
 #include "runtime_service.hpp"
 #include "shim_manager.hpp"
+#include "state_poller.hpp"
+#include "recovery.hpp"
+
 #include "runtime.pb.h"
 
 namespace {
@@ -54,13 +57,21 @@ int create_listen_socket(const std::string& path, std::string& err) {
     return fd;
 }
 
-void handle_client(int client_fd,
-                   cont_daemon::RuntimeService& service) {
-
+void handle_client(int client_fd, cont_daemon::RuntimeService& service) {
     auto send = [client_fd](const runtime::v1::ServerMessage& msg) {
         std::string err;
         if (!common::write_message(client_fd, msg, err)) {
-            std::fprintf(stderr, "cont_daemon: write to client: %s\n", err.c_str());
+            std::fprintf(stderr, "daemon: write to client: %s\n", err.c_str());
+            return false;
+        }
+        return true;
+    };
+
+    auto recv = [client_fd](runtime::v1::ClientMessage& msg) {
+        std::string err;
+        if (!common::read_message(client_fd, msg, err)) {
+            if (!err.empty())
+                std::fprintf(stderr, "daemon: read from client: %s\n", err.c_str());
             return false;
         }
         return true;
@@ -70,18 +81,25 @@ void handle_client(int client_fd,
         runtime::v1::ClientMessage req;
         std::string err;
         if (!common::read_message(client_fd, req, err)) {
-            if (!err.empty()) {
-                std::fprintf(stderr, "cont_daemon: read from client: %s\n", err.c_str());
-            }
+            if (!err.empty())
+                std::fprintf(stderr, "daemon: read from client: %s\n", err.c_str());
             break;
         }
-        if (!service.handle(req, send)) {
-            break;
-        }
+        if (!service.handle(req, client_fd, send)) break;
     }
-
     ::close(client_fd);
 }
+
+std::string resolve_shim_path() {
+    std::error_code ec;
+    auto self = std::filesystem::read_symlink("/proc/self/exe", ec);
+    if (!ec) {
+        auto sibling = self.parent_path() / "shim";
+        if (std::filesystem::exists(sibling, ec)) return sibling.string();
+    }
+    return "container-shim";
+}
+
 
 }  // namespace
 
@@ -106,10 +124,17 @@ int main(int argc, char** argv) {
     }
 
     cont_daemon::ContainerRegistry registry;
-    auto shim = cont_daemon::make_stub_shim_manager();
+    auto shim = cont_daemon::make_real_shim_manager(resolve_shim_path());
+
+    int recovered = cont_daemon::recover_containers(registry, *shim);
+    std::fprintf(stderr, "daemon: recovered %d container(s)\n", recovered);
+
     cont_daemon::RuntimeService service(registry, *shim);
 
-    // Создать слушающий сокет.
+    cont_daemon::StatePoller poller(registry, *shim, std::chrono::milliseconds(1000));
+    poller.start();
+
+
     const std::string socket_path = common::daemon_socket_path().string();
     std::string err;
     int listen_fd = create_listen_socket(socket_path, err);
@@ -120,7 +145,6 @@ int main(int argc, char** argv) {
 
     std::fprintf(stderr, "daemon: listening on %s\n", socket_path.c_str());
 
-    // Цикл accept.
     while (!g_shutdown.load(std::memory_order_relaxed)) {
         int client_fd = ::accept(listen_fd, nullptr, nullptr);
         if (client_fd < 0) {
@@ -137,6 +161,7 @@ int main(int argc, char** argv) {
     }
 
     std::fprintf(stderr, "cont_daemon: shutting down\n");
+    poller.stop();
     ::close(listen_fd);
     ::unlink(socket_path.c_str());
     return 0;
