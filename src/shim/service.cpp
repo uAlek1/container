@@ -194,6 +194,7 @@ void ShimService::handle_attach_session(int client_fd,
     // Если tty=false — PTY нет, attach невозможен.
     if (master_fd_ < 0) {
         runtime::v1::ServerMessage resp;
+        std::fprintf(stderr, "shim[%s]: attach: master_fd_ < 0\n", id_.c_str());
         resp.set_request_id(hello.request_id());
         resp.mutable_attach()->mutable_exit()->set_exit_code(1);
         std::string err;
@@ -236,48 +237,61 @@ void ShimService::handle_attach_session(int client_fd,
 
     while (!done) {
         // Если процесс завершился — отправить exit и выйти.
-        if (exited_.load(std::memory_order_acquire) && !exited_sent) {
+        bool is_exited = exited_.load(std::memory_order_acquire);
+        if (is_exited && !exited_sent) {
+            
             runtime::v1::AttachOutput out;
-            out.mutable_exit()->set_exit_code(
-                exit_code_.load(std::memory_order_relaxed));
-            send_output(out);
+            out.mutable_exit()->set_exit_code(exit_code_.load());
+            if (!send_output(out)) {
+            }
             exited_sent = true;
             done = true;
             break;
         }
 
-        int nfds = ::epoll_wait(epfd, events, 2, 100);  // 100 мс таймаут
+        int nfds = ::epoll_wait(epfd, events, 2, 100);
         if (nfds < 0) {
             if (errno == EINTR) continue;
             break;
         }
-        if (nfds == 0) continue;  // таймаут — проверить exited_
+        
+        if (nfds == 0) {
+            continue;
+        }  // таймаут — проверить exited_
 
         for (int i = 0; i < nfds && !done; ++i) {
             int fd = events[i].data.fd;
-
             if (fd == master_fd_) {
-                ssize_t n = ::read(master_fd_, buf, sizeof(buf));
-                if (n > 0) {
-                    runtime::v1::AttachOutput out;
-                    out.set_data(std::string(buf, static_cast<size_t>(n)));
-                    if (!send_output(out)) {
-                        done = true;
-                    }
-                } else if (n == 0) {
-                    // PTY закрыт — процесс завершился, отправить exit.
+                if (events[i].events & EPOLLHUP) {
                     if (!exited_sent) {
                         runtime::v1::AttachOutput out;
-                        out.mutable_exit()->set_exit_code(
-                            exited_.load() ? exit_code_.load() : 0);
+                        out.mutable_exit()->set_exit_code(exited_.load() ? exit_code_.load() : 0);
                         send_output(out);
                         exited_sent = true;
                     }
                     done = true;
-                } else if (errno != EINTR) {
+                    break;
+                }
+
+                // Обычное чтение
+                ssize_t n = ::read(master_fd_, buf, sizeof(buf));
+                if (n > 0) {
+                    runtime::v1::AttachOutput out;
+                    out.set_data(std::string(buf, static_cast<size_t>(n)));
+                    if (!send_output(out)) done = true;
+                } else if (n == 0) {
+                    if (!exited_sent) {
+                        runtime::v1::AttachOutput out;
+                        out.mutable_exit()->set_exit_code(exited_.load() ? exit_code_.load() : 0);
+                        send_output(out);
+                        exited_sent = true;
+                    }
+                    done = true;
+                } else if (errno != EINTR && errno != EAGAIN) {
                     done = true;
                 }
-            } else if (fd == client_fd) {
+            }
+            else if (fd == client_fd) {
                 runtime::v1::ClientMessage msg;
                 std::string e;
                 if (!common::read_message(client_fd, msg, e)) {

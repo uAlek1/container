@@ -111,15 +111,17 @@ int cmd_list(Client& client, std::span<const std::string_view> args) {
         return kExitOk;
     }
 
-    std::printf("%-16s %-10s %-8s %-12s %s\n",
-                "ID", "STATE", "PID", "CREATED", "COMMAND");
+    std::printf("%-16s %-10s %-8s %-6s %-12s %s\n",
+                "ID", "STATE", "PID", "EXIT", "CREATED", "COMMAND");
     for (const auto& c : list.containers()) {
         std::string cmd = join_argv(c.argv());
-        std::printf("%-16s %-10.*s %-8d %-12ld %s\n",
+        int exit_display = c.exit_code();
+        std::printf("%-16s %-10.*s %-8d %-6d %-12ld %s\n",
                     c.id().c_str(),
                     static_cast<int>(state_to_string(c.state()).size()),
                     state_to_string(c.state()).data(),
                     c.pid(),
+                    exit_display,
                     static_cast<long>(c.created_at()),
                     cmd.c_str());
     }

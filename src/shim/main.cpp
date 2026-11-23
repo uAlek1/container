@@ -91,16 +91,16 @@ int main(int argc, char** argv) {
         return 2;
     }
 
-    id_t pid = ::fork();
-    if (pid < 0) {
-        perror("fork");
-        return 1;
-    }
-    if (pid > 0) {
-        ::_exit(0);
-    }
+    // id_t pid = ::fork();
+    // if (pid < 0) {
+    //     perror("fork");
+    //     return 1;
+    // }
+    // if (pid > 0) {
+    //     ::_exit(0);
+    // }
 
-    if (::setsid() < 0) {
+    if (::setsid() < 0 && errno != EPERM) {
         std::fprintf(stderr, "container-shim: setsid: %s\n", std::strerror(errno));
         return 1;
     }

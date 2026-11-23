@@ -199,6 +199,8 @@ std::expected<SpawnResult, Error> spawn(const SpawnRequest& req) {
             ::close(err_pipe[0]);  ::close(err_pipe[1]);
             return std::unexpected(Error{1, errno, "posix_openpt"});
         }
+        int flags = ::fcntl(master_fd, F_GETFL, 0);
+        ::fcntl(master_fd, F_SETFL, flags | O_NONBLOCK);
         if (::grantpt(master_fd) < 0 || ::unlockpt(master_fd) < 0) {
             int e = errno;
             ::close(master_fd);
