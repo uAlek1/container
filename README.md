@@ -22,6 +22,8 @@
 mkdir build && cd build
 cmake ..
 cmake --build .
+# первая сборка может быть долгой
+
 ```
 
 Все бинарники появятся в `build/bin/`.
